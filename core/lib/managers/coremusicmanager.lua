@@ -1,0 +1,148 @@
+CoreMusicManager = CoreMusicManager or class()
+
+function CoreMusicManager:init()
+	if not Global.music_manager then
+		Global.music_manager = {}
+	 	Global.music_manager.source = SoundDevice:create_source( "music" )
+	 	Global.music_manager.volume = 0
+	end
+	
+	self._path_list = {}
+	self._path_map = {}
+	self._event_map = {}
+
+	local temp_list = {}
+	local events = Application:editor() and PackageManager:has( Idstring( "bnk" ), Idstring( "soundbanks/music" ) ) and SoundDevice:events( "soundbanks/music" )
+
+	if events then
+		for k, v in pairs( events ) do
+			-- Store path in the path list
+
+			if not temp_list[ v.path ] then
+				temp_list[ v.path ] = 1
+				table.insert( self._path_list, v.path )
+			end
+
+			-- Store path in the path map
+
+			self._path_map[ k ] = v.path
+
+			-- Store event in the event map
+
+			if not self._event_map[ v.path ] then
+				self._event_map[ v.path ] = {}
+			end
+
+			table.insert( self._event_map[ v.path ], k )
+		end
+	end
+
+	table.sort( self._path_list )
+	
+	for k, v in pairs( self._event_map ) do
+		table.sort( v )
+	end
+	
+	-- does the game have control over music?
+	self._has_music_control = true
+	self._external_media_playing = false
+end
+
+function CoreMusicManager:init_finalize()
+	if SystemInfo:platform() == Idstring( "X360" ) then
+		self._has_music_control = XboxLive:app_has_playback_control()
+		print( "[CoreMusicManager:init_finalize]", self._has_music_control )
+		managers.platform:add_event_callback( "media_player_control", callback( self, self, "clbk_game_has_music_control" ) )
+		
+		self:set_volume( Global.music_manager.volume )
+	end
+	
+	self:_check_music_switch()
+	
+	managers.savefile:add_load_sequence_done_callback_handler( callback( self, self, "on_load_complete" ) )
+end
+
+function CoreMusicManager:_check_music_switch()
+	local switches = tweak_data.levels:get_music_switches()
+	if switches then
+		local switch = switches[ math.random( #switches ) ]
+		print( "CoreMusicManager:_check_music_switch()", switch )
+		Global.music_manager.source:set_switch( "music_randomizer", switch ) 
+	else
+		-- Reset ?
+	end
+end
+
+function CoreMusicManager:post_event( name )
+	if Global.music_manager.current_event ~= name then
+		-- print( "music event", name )
+		Global.music_manager.source:post_event( name )
+		Global.music_manager.current_event = name
+	end
+end
+
+-- Below are editor support functions
+
+function CoreMusicManager:stop()
+	Global.music_manager.source:stop()
+	Global.music_manager.current_event = nil
+end
+
+function CoreMusicManager:music_paths()
+	return self._path_list
+end
+
+function CoreMusicManager:music_events( path )
+	return self._event_map[ path ]
+end
+
+function CoreMusicManager:music_path( event )
+	return self._path_map[ event ]
+end
+
+-- volume: 0-1
+function CoreMusicManager:set_volume( volume )
+	Global.music_manager.volume = volume
+	if self._has_music_control then
+		SoundDevice:set_rtpc( "option_music_volume", volume * 100 )
+	else
+		SoundDevice:set_rtpc( "option_music_volume", 0 )
+	end
+end
+
+
+function CoreMusicManager:clbk_game_has_music_control( status )
+	print( "[CoreMusicManager:clbk_game_has_music_control]", status )
+	if status then
+		SoundDevice:set_rtpc( "option_music_volume", Global.music_manager.volume * 100 )
+	else
+		SoundDevice:set_rtpc( "option_music_volume", 0 )
+	end
+	
+	self._has_music_control = status
+end
+
+function CoreMusicManager:on_load_complete()
+	self:set_volume( managers.user:get_setting( "music_volume" ) / 100 )
+end
+
+function CoreMusicManager:has_music_control()
+	return self._has_music_control
+end
+
+-- Sync
+function CoreMusicManager:save( data )
+	local state = {
+		event = Global.music_manager.current_event,
+	}
+	data.CoreMusicManager = state
+end
+
+function CoreMusicManager:load( data )
+	local state = data.CoreMusicManager
+	if state.event then
+		self:post_event( state.event )
+	end
+end
+
+
